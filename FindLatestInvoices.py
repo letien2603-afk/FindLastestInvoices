@@ -51,7 +51,7 @@ def replace_cor_with_rev(val):
 
 def main():
     st.set_page_config(page_title="Invoice Correction Tool", layout="wide")
-    st.title("Chương Trình Xử Lý Invoice & ATF")
+    st.title("Find the Latest Invoices from ATF")
     
     # [YÊU CẦU 4]: Sử dụng session_state để các nút download không bị biến mất
     if 'processed' not in st.session_state:
@@ -65,9 +65,9 @@ def main():
     with col2:
         atf_file = st.file_uploader("2. Upload ATF file", type=['xlsx', 'xls', 'xlsb'])
 
-    if st.button("Bắt đầu xử lý dữ liệu"):
+    if st.button("Start Data Processing"):
         if not req_file or not atf_file:
-            st.error("Lỗi: Vui lòng upload đầy đủ 2 file!")
+            st.error("Error: You need to upload 2 requested files before start!")
             return
             
         progress_bar = st.progress(0)
@@ -81,13 +81,13 @@ def main():
                 else:
                     return pd.read_excel(file_upload, sheet_name=0)
 
-            status_text.text("Đang đọc dữ liệu từ file Excel...")
+            status_text.text("Scanning ATF file...")
             df_req = load_excel(req_file)
             df_atf = load_excel(atf_file)
             progress_bar.progress(20)
 
             # --- XỬ LÝ REQUESTED CORRECTION FILE ---
-            status_text.text("Đang xử lý Requested Correction file...")
+            status_text.text("Processing Requested Correction file...")
             df_req['Text'] = df_req['Invoice Number'].apply(lambda x: isinstance(x, str))
 
             def format_invoice(row):
@@ -104,7 +104,7 @@ def main():
             progress_bar.progress(40)
 
             # --- XỬ LÝ ATF FILE ---
-            status_text.text("Đang matching dữ liệu với ATF...")
+            status_text.text("Matching data against ATF...")
             df_atf['Original Invoice'] = df_atf['Invoice Number'].apply(clean_original_invoice)
             matched_atf = df_atf[df_atf['Original Invoice'].isin(original_invoices_memory)].copy()
 
@@ -121,7 +121,7 @@ def main():
             latest_atf = matched_atf[matched_atf['SortKey'] == max_sort_keys].copy()
 
             if latest_atf.empty:
-                st.warning("Không tìm thấy dữ liệu match giữa 2 file. Dừng xử lý!")
+                st.warning("Can't find any matching data!")
                 progress_bar.progress(100)
                 st.session_state.processed = False
                 return
@@ -129,7 +129,7 @@ def main():
             progress_bar.progress(60)
 
             # --- TẠO DỮ LIỆU COR & REV ---
-            status_text.text("Đang tạo các bản ghi COR và REV...")
+            status_text.text("Creating COR and REV sheets...")
             df_cor = latest_atf.copy()
             df_rev = latest_atf.copy()
 
@@ -159,7 +159,7 @@ def main():
                 df.drop(columns=cols_to_drop, errors='ignore', inplace=True)
 
             progress_bar.progress(80)
-            status_text.text("Đang gộp dữ liệu và xuất file...")
+            status_text.text("Merging COR and REV sheets...")
 
             # --- [YÊU CẦU 2 & 3]: GỘP COR & REV THÀNH SHEET "Upload" ---
             df_upload = pd.concat([df_cor, df_rev], ignore_index=True)
@@ -185,10 +185,10 @@ def main():
             st.session_state.processed = True
 
             progress_bar.progress(100)
-            status_text.success("Hoàn tất xử lý! Vui lòng tải các file kết quả bên dưới.")
+            status_text.success("Completed. Results are ready to download.")
 
         except Exception as e:
-            st.error(f"Đã xảy ra lỗi trong quá trình xử lý: {e}")
+            st.error(f"Process is completed: {e}")
             progress_bar.empty()
             st.session_state.processed = False
 
@@ -197,16 +197,16 @@ def main():
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             st.download_button(
-                label="📥 Tải xuống File Excel (.xlsx)",
+                label="📥 Download Excel (.xlsx)",
                 data=st.session_state.excel_data,
-                file_name="Matched_Latest_Invoices_Upload.xlsx",
+                file_name="Upload file.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         with col_btn2:
             st.download_button(
-                label="📥 Tải xuống File CSV (.csv)",
+                label="📥 Download CSV (.csv)",
                 data=st.session_state.csv_data,
-                file_name="Matched_Latest_Invoices_Upload.csv",
+                file_name="Upload file.csv",
                 mime="text/csv"
             )
 
