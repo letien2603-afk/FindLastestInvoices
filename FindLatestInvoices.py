@@ -139,7 +139,7 @@ def main():
             df_cor['Transaction Type'] = 'MANUAL_ADJ'
             # Cột Vertical được giữ nguyên bản từ ATF
 
-            currency_cols = ['Transaction Amount', 'EUR Value', 'CAD Value', 'GBP Value']
+            currency_cols = ['Transaction Amount', 'EUR Value', 'CAD Value', 'GBP Value', 'Native Currency', 'AUD Value']
             for col in currency_cols:
                 if col in df_cor.columns:
                     df_cor[col] = pd.to_numeric(df_cor[col], errors='coerce').abs()
