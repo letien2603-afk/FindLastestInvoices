@@ -112,7 +112,7 @@ def main():
             
             # Làm sạch dữ liệu tiền để nhóm đúng số lượng dòng (giải quyết triệt để 13 dòng của 0043905960)
             if 'Transaction Amount' in matched_atf.columns:
-                matched_atf['Temp_Amount'] = pd.to_numeric(matched_atf['Transaction Amount'], errors='coerce').abs()
+                matched_atf['Temp_Amount'] = pd.to_numeric(matched_atf['Transaction Amount'], errors='coerce').round(2).abs()
                 max_sort_keys = matched_atf.groupby(['Original Invoice', 'Temp_Amount'], dropna=False)['SortKey'].transform('max')
                 matched_atf.drop(columns=['Temp_Amount'], inplace=True)
             else:
