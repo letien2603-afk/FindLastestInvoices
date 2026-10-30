@@ -105,6 +105,7 @@ def main():
 
             # --- XỬ LÝ ATF FILE ---
             status_text.text("Matching data against ATF...")
+            df_atf = df_atf[df_atf["Process Code"].astype(str).str.strip().str.upper() == "CCREC"].copy()
             df_atf['Original Invoice'] = df_atf['Invoice Number'].apply(clean_original_invoice)
             matched_atf = df_atf[df_atf['Original Invoice'].isin(original_invoices_memory)].copy()
 
