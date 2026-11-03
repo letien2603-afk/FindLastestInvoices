@@ -1,210 +1,358 @@
+import io
+import re
+import pandas as pd
+import streamlit as st
+
+
+def format_invoice_number(val):
+  """Ensures invoice numbers are text and carry the '00' prefix if numeric."""
+  if pd.isnull(val):
+    return ""
+  s = str(val).strip()
+  if s.endswith(".0"):
+    s = s[:-2]
+  if s.isdigit() and not s.startswith("00"):
+    return "00" + s
+  return s
+
+
 def clean_original_invoice(inv):
-    """Xoá bỏ các phần COR, REV và các số theo sau để lấy Original Invoice"""
-    if pd.isnull(inv):
-        return ""
-    inv = str(inv).strip()
-    pattern = re.compile(r'[\s\-]*(COR|REV)\d*$', re.IGNORECASE)
-    cleaned = re.sub(pattern, '', inv).strip()
-    return cleaned.rstrip('- ')
+  """Removes COR and REV suffixes to get the base invoice number."""
+  if pd.isnull(inv):
+    return ""
+  inv = str(inv).strip()
+  pattern = re.compile(r"[\s-]*(COR|REV)\d*\$", re.IGNORECASE)
+  cleaned = re.sub(pattern, "", inv).strip().rstrip("- ")
+  return cleaned
+
 
 def parse_suffix_for_ranking(inv):
-    """Phân loại để tìm ra Invoice mới nhất theo 3 cấp độ: Đuôi số -> Loại -> Số lượng gạch ngang"""
-    inv = str(inv).upper().strip()
-    match = re.search(r'([\s\-]*)(COR|REV)(\d*)$', inv)
-    if not match:
-        return (0, 0, 0)
-    
-    separator = match.group(1)
-    type_str = match.group(2)
-    num_str = match.group(3)
-    
-    type_val = 2 if type_str == 'COR' else 1
-    num_val = int(num_str) if num_str else 1
-    dash_count = separator.count('-')
-    
-    return (num_val, type_val, dash_count)
+  """Ranks invoice versions to find the latest transaction record."""
+  inv = str(inv).upper().strip()
+  match = re.search(r"([\s-]*)(COR|REV)(\d*)\$", inv)
+  if not match:
+    return (0, 0, 0)
+
+  separator = match.group(1)
+  type_str = match.group(2)
+  num_str = match.group(3)
+
+  type_val = 2 if type_str == "COR" else 1
+  num_val = int(num_str) if num_str else 1
+  dash_count = separator.count("-")
+
+  return (num_val, type_val, dash_count)
+
 
 def increment_or_append_suffix(val, suffix_type):
-    """Gắn hậu tố mới chuẩn 1 gạch ngang"""
-    if pd.isnull(val): return val
-    val = str(val).strip()
-    match = re.search(r'(?i)(.*?)(?:[\s\-]*)(COR|REV)(\d*)$', val)
-    if match:
-        prefix = match.group(1).rstrip('- ') 
-        num_str = match.group(3)
-        current_num = int(num_str) if num_str else 1
-        next_num = current_num + 1
-        return f"{prefix}-{suffix_type}{next_num}"
-    else:
-        return f"{val.rstrip('- ')}-{suffix_type}"
+  """Increments existing COR/REV version number or appends new suffix."""
+  if pd.isnull(val):
+    return val
+  val = str(val).strip()
+  match = re.search(r"(?i)(.*?)(?:[\s-]*)(COR|REV)(\d*)\$", val)
+  if match:
+    prefix = match.group(1).rstrip("- ")
+    num_str = match.group(3)
+    current_num = int(num_str) if num_str else 1
+    next_num = current_num + 1
+    return f"{prefix}-{suffix_type}{next_num}"
+  else:
+    return f"{val.rstrip('- ')}-{suffix_type}"
+
 
 def replace_cor_with_rev(val):
-    """Thay thế COR thành REV để đồng bộ"""
-    if pd.isnull(val): return val
-    val = str(val)
-    return re.sub(r'COR(\d*)$', r'REV\1', val)
+  """Replaces COR with REV in suffix strings."""
+  if pd.isnull(val):
+    return val
+  return re.sub(r"COR", "REV", str(val), flags=re.IGNORECASE)
+
+
+def load_file_data(uploaded_file):
+  """Loads Excel or delimited text files directly from Streamlit uploaded file buffers."""
+  filename = uploaded_file.name.lower()
+  if filename.endswith(".xlsb"):
+    return pd.read_excel(
+        uploaded_file,
+        sheet_name=0,
+        engine="pyxlsb",
+        dtype={"Invoice Number": str},
+    )
+  elif filename.endswith((".xlsx", ".xls")):
+    return pd.read_excel(
+        uploaded_file, sheet_name=0, dtype={"Invoice Number": str}
+    )
+  else:
+    try:
+      return pd.read_csv(
+          uploaded_file, sep=None, engine="python", dtype=str
+      )
+    except Exception:
+      uploaded_file.seek(0)
+      return pd.read_excel(
+          uploaded_file, sheet_name=0, dtype={"Invoice Number": str}
+      )
+
 
 def main():
-    st.set_page_config(page_title="Invoice Correction Tool", layout="wide")
-    st.title("Find the Latest Invoices from ATF")
-    
-    # [YÊU CẦU 4]: Sử dụng session_state để các nút download không bị biến mất
-    if 'processed' not in st.session_state:
-        st.session_state.processed = False
-        st.session_state.excel_data = None
-        st.session_state.csv_data = None
+  st.set_page_config(
+      page_title="Vertical Bulk Correction Tool", page_icon="📊", layout="wide"
+  )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        req_file = st.file_uploader("1. Upload Requested Correction file", type=['xlsx', 'xls', 'xlsb'])
-    with col2:
-        atf_file = st.file_uploader("2. Upload ATF file", type=['xlsx', 'xls', 'xlsb'])
+  st.title("📊 Vertical Bulk Correction Automation")
+  st.markdown(
+      "Upload your **Requested Correction File** and **ATF File** below to"
+      " generate consolidated `COR` and `REV` upload entries."
+  )
 
-    if st.button("Start Data Processing"):
-        if not req_file or not atf_file:
-            st.error("Error: You need to upload 2 requested files before start!")
-            return
-            
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+  st.sidebar.header("📁 File Uploads")
+  req_file = st.sidebar.file_uploader(
+      "Requested Correction File", type=["xlsx", "xls", "xlsb", "csv", "txt"]
+  )
+  atf_file = st.sidebar.file_uploader(
+      "ATF File", type=["xlsx", "xls", "xlsb", "csv", "txt"]
+  )
 
+  user_comment = st.text_input(
+      "Comment (Optional)",
+      value="",
+      help="Applied to the Comments field in output records.",
+  )
+
+  # Initialize session state for persistent results
+  if "processed_results" not in st.session_state:
+    st.session_state.processed_results = None
+
+  if st.button("🚀 Process Bulk Correction", type="primary"):
+    # Reset results when button is re-clicked
+    st.session_state.processed_results = None
+
+    if not req_file or not atf_file:
+      st.error("Please upload both the Requested Correction File and ATF File.")
+    else:
+      with st.spinner("Processing files..."):
         try:
-            # Hàm phụ trợ để xử lý cho cả định dạng xlsx, xls và xlsb
-            def load_excel(file_upload):
-                if file_upload.name.endswith('.xlsb'):
-                    return pd.read_excel(file_upload, sheet_name=0, engine='pyxlsb')
-                else:
-                    return pd.read_excel(file_upload, sheet_name=0)
+          # 1. Load Files
+          df_req = load_file_data(req_file)
+          df_atf = load_file_data(atf_file)
 
-            status_text.text("Scanning ATF file...")
-            df_req = load_excel(req_file)
-            df_atf = load_excel(atf_file)
-            progress_bar.progress(20)
+          df_req.columns = df_req.columns.str.strip()
+          df_atf.columns = df_atf.columns.str.strip()
 
-            # --- XỬ LÝ REQUESTED CORRECTION FILE ---
-            status_text.text("Processing Requested Correction file...")
-            df_req['Text'] = df_req['Invoice Number'].apply(lambda x: isinstance(x, str))
+          # 2. Filter Process Code = 'CCREC' First
+          if "Process Code" in df_atf.columns:
+            df_atf = df_atf[
+                df_atf["Process Code"].astype(str).str.strip().str.upper()
+                == "CCREC"
+            ].copy()
+            if df_atf.empty:
+              st.warning(
+                  "No records found in ATF file with Process Code = 'CCREC'."
+              )
+              return
+          else:
+            st.info(
+                "'Process Code' column not found in ATF file. Proceeding without"
+                " filtering."
+            )
 
-            def format_invoice(row):
-                val = row['Invoice Number']
-                is_text = row['Text']
-                if not is_text and pd.notnull(val):
-                    return '00' + str(int(val))
-                return str(val) if pd.notnull(val) else val
+          # 3. Standardize Invoice Numbers ('00' Prefix)
+          df_req["Invoice Number"] = df_req["Invoice Number"].apply(
+              format_invoice_number
+          )
+          df_atf["Invoice Number"] = df_atf["Invoice Number"].apply(
+              format_invoice_number
+          )
 
-            df_req['Invoice Number'] = df_req.apply(format_invoice, axis=1)
-            df_req['Original Invoice'] = df_req['Invoice Number'].apply(clean_original_invoice)
-            original_invoices_memory = df_req['Original Invoice'].drop_duplicates().tolist()
+          df_req["Original Invoice"] = df_req["Invoice Number"].apply(
+              clean_original_invoice
+          )
+          original_invoices_memory = (
+              df_req["Original Invoice"].drop_duplicates().tolist()
+          )
 
-            progress_bar.progress(40)
+          if "Corrected Vertical" in df_req.columns:
+            vertical_mapping = dict(
+                zip(df_req["Original Invoice"], df_req["Corrected Vertical"])
+            )
+          else:
+            vertical_mapping = {}
 
-            # --- XỬ LÝ ATF FILE ---
-            status_text.text("Matching data against ATF...")
-            df_atf = df_atf[df_atf["Process Code"].astype(str).str.strip().str.upper() == "CCREC"].copy()
-            df_atf['Original Invoice'] = df_atf['Invoice Number'].apply(clean_original_invoice)
-            matched_atf = df_atf[df_atf['Original Invoice'].isin(original_invoices_memory)].copy()
+          # 4. Match ATF Records
+          df_atf["Original Invoice"] = df_atf["Invoice Number"].apply(
+              clean_original_invoice
+          )
+          matched_atf = df_atf[
+              df_atf["Original Invoice"].isin(original_invoices_memory)
+          ].copy()
 
-            matched_atf['SortKey'] = matched_atf['Invoice Number'].apply(parse_suffix_for_ranking)
-            
-            # Làm sạch dữ liệu tiền để nhóm đúng số lượng dòng (giải quyết triệt để 13 dòng của 0043905960)
-            if 'Transaction Amount' in matched_atf.columns:
-                matched_atf['Temp_Amount'] = pd.to_numeric(matched_atf['Transaction Amount'], errors='coerce').round(2).abs()
-                max_sort_keys = matched_atf.groupby(['Original Invoice', 'Temp_Amount'], dropna=False)['SortKey'].transform('max')
-                matched_atf.drop(columns=['Temp_Amount'], inplace=True)
-            else:
-                max_sort_keys = matched_atf.groupby('Original Invoice')['SortKey'].transform('max')
+          if matched_atf.empty:
+            st.warning(
+                "No matching invoice numbers found between ATF and Requested"
+                " file."
+            )
+            return
 
-            latest_atf = matched_atf[matched_atf['SortKey'] == max_sort_keys].copy()
+          # 5. Rank & Select Latest Version
+          matched_atf["SortKey"] = matched_atf["Invoice Number"].apply(
+              parse_suffix_for_ranking
+          )
+          matched_atf["Temp_Amount"] = (
+              pd.to_numeric(matched_atf["Transaction Amount"], errors="coerce")
+              .round(2)
+              .abs()
+          )
 
-            if latest_atf.empty:
-                st.warning("Can't find any matching data!")
-                progress_bar.progress(100)
-                st.session_state.processed = False
-                return
+          max_sort_keys = matched_atf.groupby(
+              ["Original Invoice", "Temp_Amount"], dropna=False
+          )["SortKey"].transform("max")
+          matched_atf.drop(columns=["Temp_Amount"], inplace=True)
+          latest_atf = matched_atf[
+              matched_atf["SortKey"] == max_sort_keys
+          ].copy()
 
-            progress_bar.progress(60)
+          # 6. Skip If Vertical Already Matches
+          col_vertical_atf = "Vertical"
+          if col_vertical_atf in latest_atf.columns:
+            latest_atf["Req_Vertical"] = latest_atf["Original Invoice"].map(
+                vertical_mapping
+            )
+            val_atf = (
+                latest_atf[col_vertical_atf]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+            val_req = (
+                latest_atf["Req_Vertical"].astype(str).str.strip().str.lower()
+            )
+            latest_atf = latest_atf[val_atf != val_req].copy()
+            latest_atf.drop(columns=["Req_Vertical"], inplace=True)
 
-            # --- TẠO DỮ LIỆU COR & REV ---
-            status_text.text("Creating COR and REV sheets...")
-            df_cor = latest_atf.copy()
-            df_rev = latest_atf.copy()
+          if latest_atf.empty:
+            st.warning(
+                "Verticals in all requested invoices have been updated to match"
+                " with the requested file or no matching invoices to process."
+            )
+            return
 
-            # --- XỬ LÝ DỮ LIỆU COR ---
-            df_cor['Transaction Number'] = df_cor['Transaction Number'].apply(lambda x: increment_or_append_suffix(x, 'COR'))
-            df_cor['Invoice Number'] = df_cor['Invoice Number'].apply(lambda x: increment_or_append_suffix(x, 'COR'))
-            df_cor['Transaction Type'] = 'MANUAL_ADJ'
-            # Cột Vertical được giữ nguyên bản từ ATF
+          # 7. Generate COR & REV Entries
+          df_cor = latest_atf.copy()
+          df_rev = latest_atf.copy()
 
-            currency_cols = ['Transaction Amount', 'EUR Value', 'CAD Value', 'GBP Value', 'Native Currency', 'AUD Value']
-            for col in currency_cols:
-                if col in df_cor.columns:
-                    df_cor[col] = pd.to_numeric(df_cor[col], errors='coerce').abs()
+          # COR
+          df_cor["Transaction Number"] = df_cor["Transaction Number"].apply(
+              lambda x: increment_or_append_suffix(x, "COR")
+          )
+          df_cor["Invoice Number"] = df_cor["Invoice Number"].apply(
+              lambda x: increment_or_append_suffix(x, "COR")
+          )
+          df_cor["Transaction Type"] = "MANUAL_ADJ"
+          df_cor["Vertical"] = df_cor["Original Invoice"].map(vertical_mapping)
 
-            # --- XỬ LÝ DỮ LIỆU REV ---
-            df_rev['Transaction Number'] = df_cor['Transaction Number'].apply(replace_cor_with_rev)
-            df_rev['Invoice Number'] = df_cor['Invoice Number'].apply(replace_cor_with_rev)
-            df_rev['Transaction Type'] = 'MANUAL_ADJ'
+          # REV
+          df_rev["Transaction Number"] = df_cor["Transaction Number"].apply(
+              replace_cor_with_rev
+          )
+          df_rev["Invoice Number"] = df_cor["Invoice Number"].apply(
+              replace_cor_with_rev
+          )
+          df_rev["Transaction Type"] = "MANUAL_ADJ"
 
-            for col in currency_cols:
-                if col in df_rev.columns:
-                    df_rev[col] = df_cor[col] * -1
+          cols_to_invert = [
+              "Transaction Amount",
+              "EUR Value",
+              "CAD Value",
+              "GBP Value",
+              "Native Currency",
+              "AUD Value",
+          ]
+          for col in cols_to_invert:
+            if col in df_rev.columns:
+              df_rev[col] = pd.to_numeric(df_rev[col], errors="coerce") * -1
 
-            # --- DỌN DẸP CÁC CỘT THỪA (Bao gồm YÊU CẦU 1: Xóa cột Period) ---
-            cols_to_drop = ['SortKey', 'Original Invoice', 'Period']
-            for df in [df_cor, df_rev]:
-                df.drop(columns=cols_to_drop, errors='ignore', inplace=True)
+          # Comments & Cleanup
+          for df in [df_cor, df_rev]:
+            if "Period" in df.columns:
+              df.drop(columns=["Period"], inplace=True)
 
-            progress_bar.progress(80)
-            status_text.text("Merging COR and REV sheets...")
+            if user_comment:
+              if "Comments" in df.columns:
+                df["Comments"] = user_comment
+              elif "Comment" in df.columns:
+                df["Comment"] = user_comment
+              else:
+                df["Comments"] = user_comment
 
-            # --- [YÊU CẦU 2 & 3]: GỘP COR & REV THÀNH SHEET "Upload" ---
-            df_upload = pd.concat([df_cor, df_rev], ignore_index=True)
+            df.drop(
+                columns=["SortKey", "Original Invoice"],
+                errors="ignore",
+                inplace=True,
+            )
 
-            # Format lại ID columns (loại bỏ thập phân)
-            format_cols = ['Source Business Unit ID', 'Business Unit ID']
-            for col in format_cols:
-                if col in df_upload.columns:
-                    df_upload[col] = pd.to_numeric(df_upload[col], errors='coerce').astype('Int64')
+          # Consolidate
+          df_upload = pd.concat([df_cor, df_rev], ignore_index=True)
 
-            # --- XUẤT RA EXCEL & CSV BẰNG BUFFER ---
-            # 1. Output Excel (Chỉ có duy nhất 1 sheet "Upload")
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df_upload.to_excel(writer, sheet_name='Upload', index=False)
-            
-            # 2. Output CSV
-            csv_buffer = df_upload.to_csv(index=False).encode('utf-8-sig')
+          format_cols = ["Source Business Unit ID", "Business Unit ID"]
+          for col in format_cols:
+            if col in df_upload.columns:
+              df_upload[col] = pd.to_numeric(
+                  df_upload[col], errors="coerce"
+              ).astype("Int64")
 
-            # Lưu vào Session State
-            st.session_state.excel_data = excel_buffer.getvalue()
-            st.session_state.csv_data = csv_buffer
-            st.session_state.processed = True
+          # Prepare Downloads
+          excel_buffer = io.BytesIO()
+          with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            df_upload.to_excel(writer, sheet_name="Upload", index=False)
+          excel_data = excel_buffer.getvalue()
 
-            progress_bar.progress(100)
-            status_text.success("Completed. Results are ready to download.")
+          csv_data = df_upload.to_csv(index=False, encoding="utf-8-sig")
+
+          # Store results in session_state to persist across download reruns
+          st.session_state.processed_results = {
+              "df_upload": df_upload,
+              "excel_data": excel_data,
+              "csv_data": csv_data,
+              "msg": (
+                  f"🎉 Success! Generated {len(df_upload)} records"
+                  f" ({len(df_cor)} COR + {len(df_rev)} REV)."
+              ),
+          }
 
         except Exception as e:
-            st.error(f"Process is completed: {e}")
-            progress_bar.empty()
-            st.session_state.processed = False
+          st.error(f"An error occurred during processing: {e}")
 
-    # --- HIỂN THỊ CÁC NÚT DOWNLOAD ---
-    if st.session_state.processed:
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            st.download_button(
-                label="📥 Download Excel (.xlsx)",
-                data=st.session_state.excel_data,
-                file_name="Upload file.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        with col_btn2:
-            st.download_button(
-                label="📥 Download CSV (.csv)",
-                data=st.session_state.csv_data,
-                file_name="Upload file.csv",
-                mime="text/csv"
-            )
+  # Render results if present in session_state
+  if st.session_state.processed_results is not None:
+    results = st.session_state.processed_results
+    st.success(results["msg"])
+
+    # Preview Data
+    st.subheader("Preview Output Data")
+    st.dataframe(results["df_upload"], use_container_width=True)
+
+    # Download Buttons
+    col1, col2 = st.columns(2)
+    with col1:
+      st.download_button(
+          label="📥 Download Excel (.xlsx)",
+          data=results["excel_data"],
+          file_name="Vertical Bulk Corrections.xlsx",
+          mime=(
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          ),
+          use_container_width=True,
+          key="btn_download_excel",
+      )
+    with col2:
+      st.download_button(
+          label="📥 Download CSV (.csv)",
+          data=results["csv_data"],
+          file_name="Vertical Bulk Corrections.csv",
+          mime="text/csv",
+          use_container_width=True,
+          key="btn_download_csv",
+      )
+
 
 if __name__ == "__main__":
-    main()
+  main()
