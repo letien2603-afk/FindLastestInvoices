@@ -203,6 +203,3 @@ def main():
                 use_container_width=True,
                 key="btn_dl_csv"
             )
-
-if __name__ == "__main__":
-    main()
