@@ -65,11 +65,11 @@ def main():
         "to extract only the latest invoice records filtered by `Process Code == CCREC`."
     )
 
-    st.sidebar.header("📁 File Uploads")
-    atf_file = st.sidebar.file_uploader(
+    #st.sidebar.header("📁 File Uploads")
+    #atf_file = st.sidebar.file_uploader(
         "ATF File (Required)", type=["xlsx", "xls", "xlsb", "csv", "txt"]
     )
-    correction_file = st.sidebar.file_uploader(
+    #correction_file = st.sidebar.file_uploader(
         "Requested Correction File (Optional - filter specific invoices)", 
         type=["xlsx", "xls", "xlsb", "csv", "txt"]
     )
