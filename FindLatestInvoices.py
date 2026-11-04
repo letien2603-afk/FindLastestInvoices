@@ -240,14 +240,14 @@ def main():
       st.download_button(
           label="📥 Download Excel (.xlsx)",
           data=st.session_state.excel_data,
-          file_name="Upload file.xlsx",
+          file_name="LatestInvoices.xlsx",
           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
     with col_btn2:
       st.download_button(
           label="📥 Download CSV (.csv)",
           data=st.session_state.csv_data,
-          file_name="Upload file.csv",
+          file_name="LatestInvoices.csv",
           mime="text/csv",
       )
 
